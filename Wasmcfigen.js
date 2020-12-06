@@ -1,7 +1,8 @@
 const fs = require("fs");
 const execSync = require("child_process").execSync;
 
-const WABTPATH = `../bin/`;
+const WABTPATH = `../../bin/`;
+const UNDECLARED_FUNCS = 5;
 const TYPEVAL = {
   nil: -1,
   void: 0,
@@ -32,16 +33,16 @@ let typeCountGlobal = Object.keys(TYPEVAL).length - 1;
 
 class WasmCfigen {
   constructor(functionSigFile) {
+    
+    this.sigObj = {};
+    this.declCounts = 0;
+    this.indCalls = 0;
+    this.randIndexes = [];
+    
     try {
-      this.sigObj = {};
-      this.declCounts = 0;
-      this.indCalls = 0;
-      this.randIndexes = [];
-
       const funcDeclArr = fs.readFileSync(functionSigFile, "utf8").split("\n");
-      let funcObj = funcDeclArr.map((decl, index) =>
-        this.#parseIntoObj(decl, index)
-      );
+      this.declCounts = funcDeclArr.length;
+      let funcObj = funcDeclArr.map((decl, index) => this.#parseIntoObj(decl, index));
 
       this.#sortFuncsByTypeValue(funcObj);
       this.#setSigObj(funcObj);
@@ -51,7 +52,100 @@ class WasmCfigen {
     }
   }
 
-  modWasmTable = (wasmTable, exported) => {};
+  #parseIntoObj = (declStr, index) => {
+    const funcName = declStr.split(",")[0];
+    let retAndParams = declStr.match(/\[(.*?)\]/g);
+
+    const typeCount = retAndParams.length;
+    if (typeCount === 0)
+      throw new Error("Wrong Format, At Least 1 Tokens(Name)");
+    if (typeCount < 2) {
+      for (let i = 0; i < 3 - typeCount; i++) tokenArr.push("['void']");
+    }
+
+    return {
+      name: funcName,
+      ret: this.#getRetTypeStr(retAndParams[0]),
+      params: this.#getParamTypeStr(retAndParams.slice(1)),
+      originalIdx: index + 1,
+    };
+  };
+
+  #getRetTypeStr = (retTypeStr) => {
+    retTypeStr = retTypeStr.split("', '").join(" ").slice(2, -2);
+
+    let expected = TYPEVAL[retTypeStr];
+    if (expected === "undefined") {
+      TYPEVAL[retTypeStr] = typeCountGlobal;
+      expected = typeCountGlobal;
+      typeCountGlobal++;
+    }
+    return expected;
+  };
+
+  #getParamTypeStr = (paramTypeStrArr) => {
+    let typeArr = paramTypeStrArr
+      .map((str) => str.slice(2, -2))
+      .map((type) => {
+        let expected = TYPEVAL[type];
+        if (typeof expected === "undefined") {
+          TYPEVAL[type] = typeCountGlobal;
+          expected = typeCountGlobal;
+          typeCountGlobal++;
+        }
+        return expected;
+      });
+
+    return typeArr;
+  };
+
+  #sortFuncsByTypeValue = (funcSigList) => {
+    funcSigList.sort((a, b) => {
+      return a.ret - b.ret
+        ? a.ret - b.ret
+        : this.#compareParams(a.params, b.params);
+    });
+  };
+
+  #compareParams = (a, b) => {
+    const alen = a.length;
+    const blen = b.length;
+    const gap = Math.abs(alen - blen);
+
+    let swapOrNot = false;
+    let _a = Array.from(a);
+    let _b = Array.from(b);
+    if (alen > blen) {
+      for (let i = 0; i < gap; i++) _b.push(0);
+    } else {
+      for (let i = 0; i < gap; i++) _a.push(0);
+    }
+
+    for (let i = 0; i < _a.length; i++) {
+      if (_a[i] != _b[i]) {
+        swapOrNot = _a[i] - _b[i];
+        break;
+      }
+    }
+    return swapOrNot;
+  };
+
+
+  run = (wasmTable, exported, watPath) => {
+    this.modWat(watPath);
+    this.modWasmTable(wasmTable, exported);
+  }
+
+  modWasmTable = (wasmTable, exported) => {
+      wasmTable.grow(this.declCounts + 5);
+      Object.values(this.sigObj)
+            .map(sigInfo => sigInfo.funcMem)
+            .forEach((func) => {
+                const newIndex = this.randIndexes[func.originalIdx];
+                if(newIndex > this.indCalls) newIndex += UNDECLARED_FUNCS;
+                wasmTable.set(newIndex, exported[func.funcName]);
+            })
+  };
 
   modWat = (watPath) => {
     let pathTokens = watPath.split("/");
@@ -79,7 +173,7 @@ class WasmCfigen {
   #isWatExist = (path, watFile, callback) => {
     fs.readdir(path, (err, files) => {
       if (err) return callback(err);
-      let isExist = files.some(files === watFile);
+      let isExist = files.some(files => (files === watFile));
       return callback(null, isExist);
     });
   };
@@ -153,7 +247,7 @@ class WasmCfigen {
     let preSize = tableSection.split(" ")[2];
     return watFileData.replace(
       tableSection,
-      tableSection.replace(preSize, parseInt(preSize) + 5)
+      tableSection.replace(preSize, parseInt(preSize) + UNDECLARED_FUNCS)
     );
   };
 
@@ -211,18 +305,17 @@ class WasmCfigen {
       .slice(1, -1).length;
 
   #getNewIndexesArray = (idxArr, indcalleeCount) => {
-    // console.log(idxArr, indcalleeCount);
     let hexValStr = "";
     idxArr.forEach((idx, originalIdx) => {
       let newIdx = parseInt(idx);
       if (originalIdx == indcalleeCount) {
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < UNDECLARED_FUNCS; i++) {
           hexValStr += this.#toLittleEndian(
             (indcalleeCount + parseInt(i) + 1).toString(16)
           );
         }
       }
-      if (newIdx > indcalleeCount - 1) newIdx += 5;
+      if (newIdx > indcalleeCount - 1) newIdx += UNDECLARED_FUNCS;
       hexValStr += this.#toLittleEndian(parseInt(newIdx).toString(16));
     });
     return hexValStr;
@@ -254,7 +347,7 @@ class WasmCfigen {
       idxBounds: result,
       idxBoundBytes: (funcSigCnt + 1) * 4 * 2,
       idxBoundPtrArray,
-      idxBoundPtrBytes: (acc + 5) * 4,
+      idxBoundPtrBytes: (acc + UNDECLARED_FUNCS) * 4,
     };
   };
 
@@ -270,7 +363,7 @@ class WasmCfigen {
       .sort((a, b) => a[0] - b[0])
       .forEach((pair, index) => {
         if (index == this.indCalls) {
-          for (let i = 0; i < 5; i++) {
+          for (let i = 0; i < UNDECLARED_FUNCS; i++) {
             result += this.#toLittleEndian(
               (offsetToIdxBounds + idxBoundBytes - 8).toString(16)
             );
@@ -280,7 +373,6 @@ class WasmCfigen {
           (offsetToIdxBounds + 8 * pair[1]).toString(16)
         );
       });
-    console.log(idxBoundPtrArray);
     return result;
   };
 
@@ -422,86 +514,6 @@ class WasmCfigen {
 
   #getSigVal = (ret, paramArr) =>
     `${ret}_${paramArr.reduce((acc, cur) => acc + "_" + cur)}`;
-
-  #parseIntoObj = (declStr, index) => {
-    this.declCounts++;
-
-    const funcName = declStr.split(",")[0];
-    let retAndParams = declStr.match(/\[(.*?)\]/g);
-
-    const typeCount = retAndParams.length;
-    if (typeCount === 0)
-      throw new Error("Wrong Format, At Least 1 Tokens(Name)");
-    if (typeCount < 2) {
-      for (let i = 0; i < 3 - typeCount; i++) tokenArr.push("['void']");
-    }
-
-    return {
-      name: funcName,
-      ret: this.#getRetTypeStr(retAndParams[0]),
-      params: this.#getParamTypeStr(retAndParams.slice(1)),
-      originalIdx: index + 1,
-    };
-  };
-
-  #getRetTypeStr = (retTypeStr) => {
-    retTypeStr = retTypeStr.split("', '").join(" ").slice(2, -2);
-
-    let expected = TYPEVAL[retTypeStr];
-    if (expected === "undefined") {
-      TYPEVAL[retTypeStr] = typeCountGlobal;
-      expected = typeCountGlobal;
-      typeCountGlobal++;
-    }
-    return expected;
-  };
-
-  #getParamTypeStr = (paramTypeStrArr) => {
-    let typeArr = paramTypeStrArr
-      .map((str) => str.slice(2, -2))
-      .map((type) => {
-        let expected = TYPEVAL[type];
-        if (typeof expected === "undefined") {
-          TYPEVAL[type] = typeCountGlobal;
-          expected = typeCountGlobal;
-          typeCountGlobal++;
-        }
-        return expected;
-      });
-
-    return typeArr;
-  };
-
-  #sortFuncsByTypeValue = (funcSigList) => {
-    funcSigList.sort((a, b) => {
-      return a.ret - b.ret
-        ? a.ret - b.ret
-        : this.#compareParams(a.params, b.params);
-    });
-  };
-
-  #compareParams = (a, b) => {
-    const alen = a.length;
-    const blen = b.length;
-    const gap = Math.abs(alen - blen);
-
-    let swapOrNot = false;
-    let _a = Array.from(a);
-    let _b = Array.from(b);
-    if (alen > blen) {
-      for (let i = 0; i < gap; i++) _b.push(0);
-    } else {
-      for (let i = 0; i < gap; i++) _a.push(0);
-    }
-
-    for (let i = 0; i < _a.length; i++) {
-      if (_a[i] != _b[i]) {
-        swapOrNot = _a[i] - _b[i];
-        break;
-      }
-    }
-    return swapOrNot;
-  };
 
   #exec = (command) => execSync(command).toString().trim();
 }
