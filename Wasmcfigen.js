@@ -252,10 +252,8 @@ class WasmCfigen {
   };
 
   #modElemSection = (watFileData) => {
-    isSequential = (cur, next) => cur + 1 === next;
-
-    elemSequence = 0;
-    let elemFuncSection = watFileData
+    let elemSequence = 0;
+    const elemFuncSection = watFileData
       .match(/\(elem(.*)\)/g)[0]
       .match(/func ([0-9]\s*)*/)[0]
       .split(" ")
@@ -266,7 +264,7 @@ class WasmCfigen {
       let ret = true;
       elemSequence === 0
         ? (elemSequence = funcNum)
-        : isSequential(elemSequence, funcNum)
+        : (elemSequence + 1 === funcNum)
         ? elemSequence++
         : (ret = false);
       ret == true && this.indCalls++;
@@ -392,7 +390,7 @@ class WasmCfigen {
     );
 
     result += `\n\t(data (i32.const ${currentOffset}) "${idxBoundPtrs}")
-        \n\t(data (i32.const ${
+        \t(data (i32.const ${
           currentOffset + idxBoundPtrBytes
         }) "${idxBounds}")`;
 
@@ -413,43 +411,42 @@ class WasmCfigen {
   addDataSectionRefStmt = (
     watFileData,
     ptrOffset,
-    boundOffset,
     idxOffset,
     lastOffset
   ) => {
-    const storeOriginalIdxStmt = `\n\t\ti32.const ${lastOffset}\n\t\ti32.store`;
-    const loadOriginalIdxStmt = `\n\t\ti32.const ${lastOffset}\n\t\ti32.load`;
+    const storeOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.store`;
+    const loadOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.load`;
 
     const dataSectionRefStmt = `${storeOriginalIdxStmt}\n\t\t\tblock 
-      block
-        ${loadOriginalIdxStmt}
-        ${this.getArrayRefStmt(ptrOffset)}
-        i32.load ;; lower bound
+        block
+          ${loadOriginalIdxStmt}
+          ${this.getArrayRefStmt(ptrOffset)}
+          i32.load ;; lower bound
 
-        ${loadOriginalIdxStmt}
-        ${this.getArrayRefStmt(idxOffset)}
+          ${loadOriginalIdxStmt}
+          ${this.getArrayRefStmt(idxOffset)}
 
-        i32.lt_u
-        br_if 1
+          i32.lt_u
+          br_if 1
 
-        ${loadOriginalIdxStmt}
-        ${this.getArrayRefStmt(ptrOffset)}
-        i32.load offset=4
+          ${loadOriginalIdxStmt}
+          ${this.getArrayRefStmt(ptrOffset)}
+          i32.load offset=4
 
-        ${loadOriginalIdxStmt}
-        ${this.getArrayRefStmt(idxOffset)}
-        
-        i32.ge_u
-        br_if 1
-        br 0
-      end
-      call 24
-  end
-        ${loadOriginalIdxStmt}
-        ${this.getArrayRefStmt(idxOffset)}
-		call_indirect (type 0)\n`;
+          ${loadOriginalIdxStmt}
+          ${this.getArrayRefStmt(idxOffset)}
+          
+          i32.ge_u
+          br_if 1
+          br 0
+        end
+        call 24
+    end
+    ${loadOriginalIdxStmt}
+    ${this.getArrayRefStmt(idxOffset)}
+		call_indirect`;
 
-    return watFileData.replace(/call_indirect/g, dataSectionRefStmt);
+    return watFileData.replace(/call_indirect/g, dataSectionRefStmt).slice(0, -2);
   };
 
   modDataSection = (watFileData) => {
@@ -461,17 +458,13 @@ class WasmCfigen {
       idxBoundPtrBytes,
       idxBoundBytes,
     } = this.getIndexBoundarySections(originalOffset);
-    const newIdxDataSection = `\n\t(data (i32.const ${idxOffset})
-                                         "${this.#getNewIndexesArray(
-                                           this.randIndexes,
-                                           this.indCalls
-                                         )}"))`;
+    const newIdxDataSection =
+     `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}"))`;
 
     return (
       this.addDataSectionRefStmt(
         watFileData,
         originalOffset,
-        originalOffset + idxBoundPtrBytes,
         originalOffset + idxBoundPtrBytes + idxBoundBytes,
         originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes
       ) +
