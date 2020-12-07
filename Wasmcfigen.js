@@ -31,7 +31,7 @@ const TYPEVAL = {
 
 let typeCountGlobal = Object.keys(TYPEVAL).length - 1;
 
-class WasmCfigen {
+class Wasmcfigen {
   constructor(functionSigFile) {
     
     this.sigObj = {};
@@ -137,21 +137,32 @@ class WasmCfigen {
   }
 
   modWasmTable = (wasmTable, exported) => {
-      wasmTable.grow(this.declCounts + 5);
+      // let wasmTable = new WebAssembly.Table({
+      //   'initial': this.declCounts + 5,
+      //   'maximum': this.declCounts + 5,
+      //   'element': 'anyfunc'
+      // });  
+      // console.log("Mod Table Size : ", this.declCounts + 5);
+      console.log("Randomized Index ", this.randIndexes);
       Object.values(this.sigObj)
             .map(sigInfo => sigInfo.funcMem)
             .forEach((func) => {
                 const newIndex = this.randIndexes[func.originalIdx];
                 if(newIndex > this.indCalls) newIndex += UNDECLARED_FUNCS;
+                console.log("Set ", func.funcName , " at " , newIndex);
                 wasmTable.set(newIndex, exported[func.funcName]);
             })
   };
 
+  
   modWat = (watPath) => {
     let pathTokens = watPath.split("/");
     const watFileName = pathTokens.pop();
-    const dirPath = pathTokens.join("/");
+    let dirPath = pathTokens.join("/");
+    if(dirPath === '') dirPath = '.';
     const wasmPath = `${dirPath}/${watFileName.split(".")[0]}.wasm`;
+
+    console.log("Mod Wat Start...", wasmPath, watPath);
 
     try {
       this.#isWatExist(dirPath, watFileName, (err, isExist) => {
@@ -206,14 +217,16 @@ class WasmCfigen {
   };
 
   renewIndexSection = (watPath) => {
+    console.log("WAT file exists... Renew Index Section...", watPath);
+
     let watFileData = fs.readFileSync(watPath, "utf8");
     let modifiedElemOffset = watFileData
       .match(/\(elem(.*)\)/g)[0]
       .match(/i32.const [0-9]*/)[0]
       .split(" ")[1];
 
-    this.indCalls = modifiedElemOffset - 1;
-
+    this.indCalls = parseInt(modifiedElemOffset) - 1;
+    console.log("Indirect Calls", this.indCalls);
     let newIndicesSection = watFileData.match(/\(data(.*)\)/g).pop();
     const newDataSectionStr = this.#getNewIndexesArray(
       this.randIndexes,
@@ -231,6 +244,7 @@ class WasmCfigen {
   };
 
   #createAndModWat = (wasmPath, watPath) => {
+    console.log("WAT file does not exist... Create WAT file...", wasmPath, watPath);
     this.#exec(`${WABTPATH}/wasm2wat ${wasmPath} -o ${watPath}`);
 
     const watFileData = fs.readFileSync(watPath, "utf8");
@@ -313,7 +327,7 @@ class WasmCfigen {
           );
         }
       }
-      if (newIdx > indcalleeCount - 1) newIdx += UNDECLARED_FUNCS;
+      if (newIdx > indcalleeCount) newIdx += UNDECLARED_FUNCS;
       hexValStr += this.#toLittleEndian(parseInt(newIdx).toString(16));
     });
     return hexValStr;
@@ -511,7 +525,7 @@ class WasmCfigen {
   #exec = (command) => execSync(command).toString().trim();
 }
 
-let inst = new WasmCfigen(process.argv[2]);
-inst.getSigObj();
-inst.modWat(process.argv[3]);
-module.exports = WasmCfigen;
+// let inst = new WasmCfigen(process.argv[2]);
+// inst.getSigObj();
+// inst.modWat(process.argv[3]);
+module.exports = Wasmcfigen;
