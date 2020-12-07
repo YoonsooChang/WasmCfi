@@ -54,49 +54,45 @@ class Wasmcfigen {
 
   #parseIntoObj = (declStr, index) => {
     const funcName = declStr.split(",")[0];
-    let retAndParams = declStr.match(/\[(.*?)\]/g);
+    const retAndParams = declStr.match(/\[(.*?)\]/g);
+    const typeLen = retAndParams.length;
 
-    const typeCount = retAndParams.length;
-    if (typeCount === 0)
+    if (typeLen === 0)
       throw new Error("Wrong Format, At Least 1 Tokens(Name)");
-    if (typeCount < 2) {
-      for (let i = 0; i < 3 - typeCount; i++) tokenArr.push("['void']");
-    }
-
+    (typeLen === 1) && tokenArr.push("['void']");
+    
     return {
       name: funcName,
-      ret: this.#getRetTypeStr(retAndParams[0]),
-      params: this.#getParamTypeStr(retAndParams.slice(1)),
+      ret: this.#getRetTypeVal(retAndParams[0]),
+      params: this.#getParamTypeVal(retAndParams.slice(1)),
       originalIdx: index + 1,
     };
   };
 
-  #getRetTypeStr = (retTypeStr) => {
-    retTypeStr = retTypeStr.split("', '").join(" ").slice(2, -2);
+  #getRetTypeVal = (retTypeStr) => {
+    const sanitizedStr = retTypeStr.split("', '").join(" ").slice(2, -2);
 
-    let expected = TYPEVAL[retTypeStr];
+    let expected = TYPEVAL[sanitizedStr];
     if (expected === "undefined") {
-      TYPEVAL[retTypeStr] = typeCountGlobal;
-      expected = typeCountGlobal;
-      typeCountGlobal++;
+      TYPEVAL[sanitizedStr] = typeCountGlobal;
+      expected = typeCountGlobal++;
     }
     return expected;
   };
 
-  #getParamTypeStr = (paramTypeStrArr) => {
-    let typeArr = paramTypeStrArr
-      .map((str) => str.slice(2, -2))
-      .map((type) => {
-        let expected = TYPEVAL[type];
+  #getParamTypeVal = (paramTypeStrArr) => {
+    let expectedArr = paramTypeStrArr
+      .map((paramTypeStr) => {
+        const sanitizedStr = paramTypeStr.slice(2, -2);
+        let expected = TYPEVAL[sanitizedStr];
         if (typeof expected === "undefined") {
-          TYPEVAL[type] = typeCountGlobal;
-          expected = typeCountGlobal;
-          typeCountGlobal++;
+          TYPEVAL[sanitizedStr] = typeCountGlobal;
+          expected = typeCountGlobal++;
         }
         return expected;
       });
 
-    return typeArr;
+    return expectedArr;
   };
 
   #sortFuncsByTypeValue = (funcSigList) => {
@@ -130,12 +126,6 @@ class Wasmcfigen {
     return swapOrNot;
   };
 
-
-  run = (wasmTable, exported, watPath) => {
-    this.modWat(watPath);
-    this.modWasmTable(wasmTable, exported);
-  }
-
   modWasmTable = (wasmTable, exported) => {
       Object.values(this.sigObj)
             .map(sigInfo => sigInfo.funcMem)
@@ -143,30 +133,26 @@ class Wasmcfigen {
             .forEach((func) => {    
                 let newIndex = this.randIndexes[func.originalIdx-1];
                 if(newIndex > this.indCalls) newIndex += UNDECLARED_FUNCS;
-                console.log("Set ", func.funcName , " at " , newIndex, " , original is ", func.originalIdx);
+                // console.log("Set ", func.funcName , " at " , newIndex, " , original is ", func.originalIdx);
 
                 wasmTable.set(newIndex, exported[func.funcName]);
-            })
+            });
   };
 
-  
   modWatSync = (watPath) => {
-
     let pathTokens = watPath.split("/");
     const watFileName = pathTokens.pop();
-    let dirPath = pathTokens.join("/");
-    if(dirPath === '') dirPath = '.';
+    const dirPath = ((pathTokens.length === 0) ? '.' : pathTokens.join('/'));
     const wasmPath = `${dirPath}/${watFileName.split(".")[0]}.wasm`;
 
-    console.log("Mod Wat Start...", wasmPath, watPath);
+    // console.log("Mod Wat Start...", wasmPath, watPath);
 
     try {
-      const isExist =this.#isWatExist(dirPath, watFileName);
-
-      this.indexRandomize();
-
+      this.#indexRandomize();
+      
+      const isExist = this.#isWatExist(dirPath, watFileName);
       isExist
-        ? this.renewIndexSection(watPath)
+        ? this.#renewIndexSection(watPath)
         : this.#createAndModWat(wasmPath, watPath);
 
       this.#exec(`${WABTPATH}/wat2wasm ${watPath} -o ${wasmPath}`);
@@ -175,38 +161,38 @@ class Wasmcfigen {
     }
   };
 
-  #isWatExist = (path, watFile) => 
-    fs.readdirSync(path).some(files => (files === watFile));
+  #isWatExist = (path, watFile) => fs.readdirSync(path).some(files => (files === watFile));
 
-  indexRandomize = () => {
+  #indexRandomize = () => {
     let indexPairs = [];
     let acc = 1;
-    Object.values(this.sigObj).map((obj) => {
-      const randArr = this.#getRands(obj.count);
-      obj.funcMem.forEach((func, index) => {
-        indexPairs.push([func.originalIdx, randArr[index] + acc]);
-      });
-      acc += obj.count;
-    });
-    this.randIndexes = indexPairs
-      .sort((a, b) => a[0] - b[0])
-      .map((pair) => pair[1]);
+    Object.values(this.sigObj)
+          .forEach((sigInfo) => {
+                    const randArr = this.#genUniqueRands(sigInfo.count);
+                    sigInfo.funcMem.forEach((func, index) => {
+                      indexPairs.push([func.originalIdx, randArr[index] + acc]);
+                    });
+                    acc += sigInfo.count;
+                  });
+
+    this.randIndexes = indexPairs.sort((a, b) => a[0] - b[0])
+                                 .map((pair) => pair[1]);
   };
 
-  #getRands = (cnt) => {
+  #genUniqueRands = (range) => {
     let arr = [];
     let rand;
-    for (let i = 0; i < cnt; i++) {
+    for (let i = 0; i < range; i++) {
       do {
-        rand = Math.floor(Math.random() * cnt);
+        rand = Math.floor(Math.random() * range);
       } while (arr.some((e) => e === rand));
       arr.push(rand);
     }
     return arr;
   };
 
-  renewIndexSection = (watPath) => {
-    console.log("WAT file exists... Renew Index Section...", watPath);
+  #renewIndexSection = (watPath) => {
+    // console.log("WAT file exists... Renew Index Section...", watPath);
 
     let watFileData = fs.readFileSync(watPath, "utf8");
     let modifiedElemOffset = watFileData
@@ -215,7 +201,7 @@ class Wasmcfigen {
       .split(" ")[1];
 
     this.indCalls = parseInt(modifiedElemOffset) - 1;
-    console.log("Indirect Calls", this.indCalls);
+    // console.log("Indirect Calls", this.indCalls);
     let newIndicesSection = watFileData.match(/\(data(.*)\)/g).pop();
     const newDataSectionStr = this.#getNewIndexesArray(
       this.randIndexes,
@@ -231,7 +217,7 @@ class Wasmcfigen {
   };
 
   #createAndModWat = (wasmPath, watPath) => {
-    console.log("WAT file does not exist... Create WAT file...", wasmPath, watPath);
+    // console.log("WAT file does not exist... Create WAT file...", wasmPath, watPath);
     this.#exec(`${WABTPATH}/wasm2wat ${wasmPath} -o ${watPath}`);
 
     const watFileData = fs.readFileSync(watPath, "utf8");
@@ -303,18 +289,23 @@ class Wasmcfigen {
       .split("\\")
       .slice(1).length;
 
+  #getPaddingForUndeclaredIndCalls = (offset) => {
+      let rst = '';   
+      for (let i = 0; i < UNDECLARED_FUNCS; i++) {
+          rst += this.#toLittleEndian(
+            (offset + parseInt(i) + 1).toString(16)
+          );
+      }
+      return rst;
+  }
+
   #getNewIndexesArray = (idxArr, indcalleeCount) => {
     let hexValStr = "";
     idxArr.forEach((idx, originalIdx) => {
-      let newIdx = parseInt(idx);
-      if (originalIdx == indcalleeCount) {
-        for (let i = 0; i < UNDECLARED_FUNCS; i++) {
-          hexValStr += this.#toLittleEndian(
-            (indcalleeCount + parseInt(i) + 1).toString(16)
-          );
-        }
-      }
-      if (newIdx > indcalleeCount) newIdx += UNDECLARED_FUNCS;
+      (originalIdx == indcalleeCount) && (hexValStr += this.#getPaddingForUndeclaredIndCalls(indcalleeCount));
+     
+      let newIdx = parseInt(idx); 
+      (newIdx > indcalleeCount)&& (newIdx += UNDECLARED_FUNCS);
       hexValStr += this.#toLittleEndian(parseInt(newIdx).toString(16));
     });
     return hexValStr;
@@ -324,27 +315,28 @@ class Wasmcfigen {
     let acc = 1;
     let result = "";
     let idxBoundPtrArray = [];
-    let funcSigCnt = 0;
-    for (const [_, funcSigInfo] of Object.entries(this.sigObj)) {
-      funcSigInfo.funcMem.forEach((f) =>
-        idxBoundPtrArray.push([f.originalIdx, funcSigCnt])
-      );
-      funcSigCnt++;
+    Object.values(this.sigObj)
+          .forEach( (sigInfo, funcSigIndex) => {
+              sigInfo.funcMem.forEach((f) =>
+                idxBoundPtrArray.push([f.originalIdx, funcSigIndex])
+              );
 
-      let lowerbound = acc;
-      let upperbound = (acc += parseInt(funcSigInfo.count));
-      result +=
-        this.#toLittleEndian(lowerbound.toString(16)) +
-        this.#toLittleEndian(upperbound.toString(16));
-    }
-
+              let lowerbound = acc;
+              let upperbound = (acc += parseInt(sigInfo.count));
+              
+              result += (this.#toLittleEndian(lowerbound.toString(16)) +
+                          this.#toLittleEndian(upperbound.toString(16)));
+          });
+                              
     const idxBoundForLibs =
       this.#toLittleEndian((this.indCalls + 1).toString(16)) +
       this.#toLittleEndian((this.indCalls + 5).toString(16));
+
     result += idxBoundForLibs;
+
     return {
       idxBounds: result,
-      idxBoundBytes: (funcSigCnt + 1) * 4 * 2,
+      idxBoundBytes: (Object.keys(this.sigObj).length + 1) * 4 * 2,
       idxBoundPtrArray,
       idxBoundPtrBytes: (acc - 1 + UNDECLARED_FUNCS) * 4,
     };
@@ -413,31 +405,28 @@ class Wasmcfigen {
     watFileData,
     ptrOffset,
     idxOffset,
-    // lastOffset
   ) => {
-    const setOriginalIdxAtGlobalStmt = `\n\t\t\tglobal.set 2`;
-    const getOriginalIdxFromGlobalStmt = '\n\t\t\tglobal.get 2';
-    // const storeOriginalIdxStmt = `\n\t\t\ti32.store offset=${lastOffset}`;
-    // const loadOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.load`;
+    const saveOriginalIdxStmt = `\n\t\t\tglobal.set 2`;
+    const loadOriginalIdxStmt = '\n\t\t\tglobal.get 2';
 
-    const dataSectionRefStmt = `${setOriginalIdxAtGlobalStmt}
+    const dataSectionRefStmt = `${saveOriginalIdxStmt}
       \t\t\tblock 
         block
-          ${getOriginalIdxFromGlobalStmt}
+          ${loadOriginalIdxStmt}
           ${this.getArrayRefStmt(ptrOffset)}
           i32.load ;; lower bound
 
-          ${getOriginalIdxFromGlobalStmt}
+          ${loadOriginalIdxStmt}
           ${this.getArrayRefStmt(idxOffset)}
 
           i32.lt_u
           br_if 1
 
-          ${getOriginalIdxFromGlobalStmt}
+          ${loadOriginalIdxStmt}
           ${this.getArrayRefStmt(ptrOffset)}
           i32.load offset=4
 
-          ${getOriginalIdxFromGlobalStmt}
+          ${loadOriginalIdxStmt}
           ${this.getArrayRefStmt(idxOffset)}
           
           i32.ge_u
@@ -446,7 +435,7 @@ class Wasmcfigen {
         end
         call 24
     end
-    ${getOriginalIdxFromGlobalStmt}
+    ${loadOriginalIdxStmt}
     ${this.getArrayRefStmt(idxOffset)}
 		call_indirect`;
 
@@ -457,13 +446,14 @@ class Wasmcfigen {
     const originalOffset = this.#getDataSectionOffset(
       watFileData.match(/\(data(.*)\)/g).pop()
     );
+
     const {
       idxBoundDataSection,
       idxBoundPtrBytes,
       idxBoundBytes,
     } = this.getIndexBoundarySections(originalOffset);
+    
     const newIdxDataSection = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}")`;
-    // const sectionForGlobal = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes}) "\\00\\00\\00\\00")`;
     const globalForOriginalIdx = `\n\t(global (mut i32) (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes})))`;
 
     return (
@@ -471,26 +461,24 @@ class Wasmcfigen {
         watFileData,
         originalOffset,
         originalOffset + idxBoundPtrBytes + idxBoundBytes,
-        // originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes
       ) +
       idxBoundDataSection +
       newIdxDataSection +
-      // sectionForGlobal +
       globalForOriginalIdx
     );
   };
 
   getSigObj = () => {
     for (const [sig, detail] of Object.entries(this.sigObj)) {
-      console.log(`${sig} : { `);
+      console.log(`${sig} : {\n\tfuncMem : {`);
       detail.funcMem.forEach((func) => {
-        console.log(`   {`);
-        for (const [key, val] of Object.entries(func)) {
-          console.log(`       ${key} : ${val}`);
-        }
-        console.log(`   }`);
+        console.log(`\n\t\t{`);
+        for (const [key, val] of Object.entries(func)) 
+          console.log(`\n\t\t\t${key} : ${val}`);
+        console.log(`\n\t\t}`);
       });
-      console.log(`   count : ${detail.count}`);
+      console.log(`\n\t}`);
+      console.log(`\n\tcount : ${detail.count}\n}`);
     }
   };
 
