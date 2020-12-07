@@ -137,20 +137,14 @@ class Wasmcfigen {
   }
 
   modWasmTable = (wasmTable, exported) => {
-      // let wasmTable = new WebAssembly.Table({
-      //   'initial': this.declCounts + 5,
-      //   'maximum': this.declCounts + 5,
-      //   'element': 'anyfunc'
-      // });  
-      // console.log("Mod Table Size : ", this.declCounts + 5);
-      console.log("Randomized Index ", this.randIndexes);
       Object.values(this.sigObj)
             .map(sigInfo => sigInfo.funcMem)
             .flat()
-            .forEach((func) => {
+            .forEach((func) => {    
                 let newIndex = this.randIndexes[func.originalIdx-1];
                 if(newIndex > this.indCalls) newIndex += UNDECLARED_FUNCS;
-                console.log("Set ", func.funcName , " at " , newIndex);
+                console.log("Set ", func.funcName , " at " , newIndex, " , original is ", func.originalIdx);
+
                 wasmTable.set(newIndex, exported[func.funcName]);
             })
   };
@@ -434,7 +428,14 @@ class Wasmcfigen {
     // const storeOriginalIdxStmt = `\n\t\t\ti32.store offset=${lastOffset}`;
     // const loadOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.load`;
 
-    const dataSectionRefStmt = `${setOriginalIdxAtGlobalStmt}\n\t\t\tblock 
+    const dataSectionRefStmt = `${setOriginalIdxAtGlobalStmt}
+
+      ${getOriginalIdxFromGlobalStmt}
+			${getOriginalIdxFromGlobalStmt}
+      ${this.getArrayRefStmt(idxOffset)}
+      call 26
+
+      \t\t\tblock 
         block
           ${getOriginalIdxFromGlobalStmt}
           ${this.getArrayRefStmt(ptrOffset)}
@@ -466,8 +467,7 @@ class Wasmcfigen {
     return watFileData.replace(/call_indirect/g, dataSectionRefStmt).slice(0, -2);
   };
 
-  modDataSection = (watFileData) => {
-    const 
+  modDataSection = (watFileData) => { 
     const originalOffset = this.#getDataSectionOffset(
       watFileData.match(/\(data(.*)\)/g).pop()
     );
@@ -477,8 +477,8 @@ class Wasmcfigen {
       idxBoundBytes,
     } = this.getIndexBoundarySections(originalOffset);
     const newIdxDataSection = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}")`;
-    const sectionForGlobal = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes}) "\\00\\00\\00\\00")`;
-    const globalForOriginalIdx = `\n\t(global i32 (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes})))`;
+    // const sectionForGlobal = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes}) "\\00\\00\\00\\00")`;
+    const globalForOriginalIdx = `\n\t(global (mut i32) (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes})))`;
 
     return (
       this.addDataSectionRefStmt(
@@ -489,7 +489,7 @@ class Wasmcfigen {
       ) +
       idxBoundDataSection +
       newIdxDataSection +
-      sectionForGlobal +
+      // sectionForGlobal +
       globalForOriginalIdx
     );
   };
@@ -535,7 +535,4 @@ class Wasmcfigen {
   #exec = (command) => execSync(command).toString().trim();
 }
 
-// let inst = new WasmCfigen(process.argv[2]);
-// inst.getSigObj();
-// inst.modWat(process.argv[3]);
 module.exports = Wasmcfigen;
