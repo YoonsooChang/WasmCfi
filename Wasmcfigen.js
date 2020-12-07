@@ -262,7 +262,7 @@ class Wasmcfigen {
     let preSize = tableSection.split(" ")[2];
     return watFileData.replace(
       tableSection,
-      tableSection.replace(preSize, parseInt(preSize) + UNDECLARED_FUNCS)
+      tableSection.replace(preSize, parseInt(preSize) + UNDECLARED_FUNCS + 1)
     );
   };
 
@@ -315,7 +315,7 @@ class Wasmcfigen {
     lastDataSection
       .match(/"(.*?)"/g)[0]
       .split("\\")
-      .slice(1, -1).length;
+      .slice(1).length;
 
   #getNewIndexesArray = (idxArr, indcalleeCount) => {
     let hexValStr = "";
@@ -360,7 +360,7 @@ class Wasmcfigen {
       idxBounds: result,
       idxBoundBytes: (funcSigCnt + 1) * 4 * 2,
       idxBoundPtrArray,
-      idxBoundPtrBytes: (acc + UNDECLARED_FUNCS) * 4,
+      idxBoundPtrBytes: (acc - 1 + UNDECLARED_FUNCS) * 4,
     };
   };
 
@@ -427,28 +427,30 @@ class Wasmcfigen {
     watFileData,
     ptrOffset,
     idxOffset,
-    lastOffset
+    // lastOffset
   ) => {
-    const storeOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.store`;
-    const loadOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.load`;
+    const setOriginalIdxAtGlobalStmt = `\n\t\t\tglobal.set 2`;
+    const getOriginalIdxFromGlobalStmt = '\n\t\t\tglobal.get 2';
+    // const storeOriginalIdxStmt = `\n\t\t\ti32.store offset=${lastOffset}`;
+    // const loadOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.load`;
 
-    const dataSectionRefStmt = `${storeOriginalIdxStmt}\n\t\t\tblock 
+    const dataSectionRefStmt = `${setOriginalIdxAtGlobalStmt}\n\t\t\tblock 
         block
-          ${loadOriginalIdxStmt}
+          ${getOriginalIdxFromGlobalStmt}
           ${this.getArrayRefStmt(ptrOffset)}
           i32.load ;; lower bound
 
-          ${loadOriginalIdxStmt}
+          ${getOriginalIdxFromGlobalStmt}
           ${this.getArrayRefStmt(idxOffset)}
 
           i32.lt_u
           br_if 1
 
-          ${loadOriginalIdxStmt}
+          ${getOriginalIdxFromGlobalStmt}
           ${this.getArrayRefStmt(ptrOffset)}
           i32.load offset=4
 
-          ${loadOriginalIdxStmt}
+          ${getOriginalIdxFromGlobalStmt}
           ${this.getArrayRefStmt(idxOffset)}
           
           i32.ge_u
@@ -457,7 +459,7 @@ class Wasmcfigen {
         end
         call 24
     end
-    ${loadOriginalIdxStmt}
+    ${getOriginalIdxFromGlobalStmt}
     ${this.getArrayRefStmt(idxOffset)}
 		call_indirect`;
 
@@ -465,6 +467,7 @@ class Wasmcfigen {
   };
 
   modDataSection = (watFileData) => {
+    const 
     const originalOffset = this.#getDataSectionOffset(
       watFileData.match(/\(data(.*)\)/g).pop()
     );
@@ -473,18 +476,21 @@ class Wasmcfigen {
       idxBoundPtrBytes,
       idxBoundBytes,
     } = this.getIndexBoundarySections(originalOffset);
-    const newIdxDataSection =
-     `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}"))`;
+    const newIdxDataSection = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}")`;
+    const sectionForGlobal = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes}) "\\00\\00\\00\\00")`;
+    const globalForOriginalIdx = `\n\t(global i32 (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes})))`;
 
     return (
       this.addDataSectionRefStmt(
         watFileData,
         originalOffset,
         originalOffset + idxBoundPtrBytes + idxBoundBytes,
-        originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes
+        // originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes
       ) +
       idxBoundDataSection +
-      newIdxDataSection
+      newIdxDataSection +
+      sectionForGlobal +
+      globalForOriginalIdx
     );
   };
 
