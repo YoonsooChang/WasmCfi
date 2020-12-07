@@ -150,7 +150,8 @@ class Wasmcfigen {
   };
 
   
-  modWat = (watPath) => {
+  modWatSync = (watPath) => {
+
     let pathTokens = watPath.split("/");
     const watFileName = pathTokens.pop();
     let dirPath = pathTokens.join("/");
@@ -160,29 +161,22 @@ class Wasmcfigen {
     console.log("Mod Wat Start...", wasmPath, watPath);
 
     try {
-      this.#isWatExist(dirPath, watFileName, (err, isExist) => {
-        if (err) throw err;
+      const isExist =this.#isWatExist(dirPath, watFileName);
 
-        this.indexRandomize();
+      this.indexRandomize();
 
-        isExist
-          ? this.renewIndexSection(watPath)
-          : this.#createAndModWat(wasmPath, watPath);
+      isExist
+        ? this.renewIndexSection(watPath)
+        : this.#createAndModWat(wasmPath, watPath);
 
-        this.#exec(`${WABTPATH}/wat2wasm ${watPath} -o ${wasmPath}`);
-      });
+      this.#exec(`${WABTPATH}/wat2wasm ${watPath} -o ${wasmPath}`);
     } catch (err) {
       console.log(`Wasm-Cfi Error, Wat Modification Failed.`, err);
     }
   };
 
-  #isWatExist = (path, watFile, callback) => {
-    fs.readdir(path, (err, files) => {
-      if (err) return callback(err);
-      let isExist = files.some(files => (files === watFile));
-      return callback(null, isExist);
-    });
-  };
+  #isWatExist = (path, watFile) => 
+    fs.readdirSync(path).some(files => (files === watFile));
 
   indexRandomize = () => {
     let indexPairs = [];
@@ -233,9 +227,7 @@ class Wasmcfigen {
       `"${newDataSectionStr}"`
     );
 
-    fs.writeFileSync(watPath, watFileData, "utf-8", () => {
-      console.log("Index Array Is Renewed.");
-    });
+    fs.writeFileSync(watPath, watFileData, "utf-8");
   };
 
   #createAndModWat = (wasmPath, watPath) => {
@@ -429,12 +421,6 @@ class Wasmcfigen {
     // const loadOriginalIdxStmt = `\n\t\t\ti32.const ${lastOffset}\n\t\t\ti32.load`;
 
     const dataSectionRefStmt = `${setOriginalIdxAtGlobalStmt}
-
-      ${getOriginalIdxFromGlobalStmt}
-			${getOriginalIdxFromGlobalStmt}
-      ${this.getArrayRefStmt(idxOffset)}
-      call 26
-
       \t\t\tblock 
         block
           ${getOriginalIdxFromGlobalStmt}
