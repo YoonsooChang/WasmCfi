@@ -146,8 +146,9 @@ class Wasmcfigen {
       console.log("Randomized Index ", this.randIndexes);
       Object.values(this.sigObj)
             .map(sigInfo => sigInfo.funcMem)
+            .flat()
             .forEach((func) => {
-                const newIndex = this.randIndexes[func.originalIdx];
+                let newIndex = this.randIndexes[func.originalIdx-1];
                 if(newIndex > this.indCalls) newIndex += UNDECLARED_FUNCS;
                 console.log("Set ", func.funcName , " at " , newIndex);
                 wasmTable.set(newIndex, exported[func.funcName]);
@@ -507,8 +508,11 @@ class Wasmcfigen {
       if (index === 0) {
         arr = Array.of({ funcName: obj.name, originalIdx: obj.originalIdx });
         sig = this.#getSigVal(obj.ret, obj.params);
-      } else if (index === funcObjList.length - 1)
+      }
+      else if (index === funcObjList.length - 1) {
+        arr.push({ funcName: obj.name, originalIdx: obj.originalIdx });
         this.sigObj[sig] = { funcMem: arr, count: arr.length };
+      }
       else {
         if (sig != this.#getSigVal(obj.ret, obj.params)) {
           this.sigObj[sig] = { funcMem: arr, count: arr.length };
