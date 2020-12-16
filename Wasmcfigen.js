@@ -133,7 +133,7 @@ class Wasmcfigen {
             .forEach((func) => {    
                 let newIndex = this.randIndexes[func.originalIdx-1];
                 if(newIndex > this.indCalls) newIndex += UNDECLARED_FUNCS;
-                // console.log("Set ", func.funcName , " at " , newIndex, " , original is ", func.originalIdx);
+                console.log("Set ", func.funcName , " at " , newIndex, " , original is ", func.originalIdx);
 
                 wasmTable.set(newIndex, exported[func.funcName]);
             });
@@ -216,14 +216,22 @@ class Wasmcfigen {
     fs.writeFileSync(watPath, watFileData, "utf-8");
   };
 
+  #composeFunc = (...funcArgs) => {
+      return funcArgs.reduce(
+        (prev, next) => (...args) => next(prev(...args)),
+        k => k 
+      )
+  }
+
   #createAndModWat = (wasmPath, watPath) => {
     // console.log("WAT file does not exist... Create WAT file...", wasmPath, watPath);
     this.#exec(`${WABTPATH}/wasm2wat ${wasmPath} -o ${watPath}`);
 
     const watFileData = fs.readFileSync(watPath, "utf8");
-    const modifiedWat = this.modDataSection(
-      this.#modElemSection(this.#modTableSize(watFileData))
-    );
+    const modifiedWat = this.#composeFunc(this.#modTableSize, this.#modElemSection, this.#modElemSection)(watFileData);
+    // const modifiedWat = this.#modDataSection(
+    //   this.#modElemSection(this.#modTableSize(watFileData))
+    // );
     fs.writeFileSync(watPath, modifiedWat, "utf-8", () => {
       console.log("Wat Creation & Modification Is Done.");
     });
@@ -311,7 +319,7 @@ class Wasmcfigen {
     return hexValStr;
   };
 
-  setIndexBoundaries = () => {
+  #setIndexBoundaries = () => {
     let acc = 1;
     let result = "";
     let idxBoundPtrArray = [];
@@ -342,7 +350,7 @@ class Wasmcfigen {
     };
   };
 
-  setIndexBoundPtrs = (
+  #setIndexBoundPtrs = (
     offset,
     idxBoundBytes,
     idxBoundPtrArray,
@@ -367,15 +375,15 @@ class Wasmcfigen {
     return result;
   };
 
-  getIndexBoundarySections = (currentOffset) => {
+  #getIndexBoundarySections = (currentOffset) => {
     let result = "";
     let {
       idxBounds,
       idxBoundBytes,
       idxBoundPtrArray,
       idxBoundPtrBytes,
-    } = this.setIndexBoundaries();
-    let idxBoundPtrs = this.setIndexBoundPtrs(
+    } = this.#setIndexBoundaries();
+    let idxBoundPtrs = this.#setIndexBoundPtrs(
       currentOffset,
       idxBoundBytes,
       idxBoundPtrArray,
@@ -394,14 +402,14 @@ class Wasmcfigen {
     };
   };
 
-  getArrayRefStmt = (offset) =>
+  #getArrayRefStmt = (offset) =>
     `i32.const 1
         i32.sub
         i32.const 4
         i32.mul
         i32.load offset=${offset}`;
 
-  addDataSectionRefStmt = (
+  #addDataSectionRefStmt = (
     watFileData,
     ptrOffset,
     idxOffset,
@@ -413,21 +421,21 @@ class Wasmcfigen {
       \t\t\tblock 
         block
           ${loadOriginalIdxStmt}
-          ${this.getArrayRefStmt(ptrOffset)}
+          ${this.#getArrayRefStmt(ptrOffset)}
           i32.load ;; lower bound
 
           ${loadOriginalIdxStmt}
-          ${this.getArrayRefStmt(idxOffset)}
+          ${this.#getArrayRefStmt(idxOffset)}
 
           i32.lt_u
           br_if 1
 
           ${loadOriginalIdxStmt}
-          ${this.getArrayRefStmt(ptrOffset)}
+          ${this.#getArrayRefStmt(ptrOffset)}
           i32.load offset=4
 
           ${loadOriginalIdxStmt}
-          ${this.getArrayRefStmt(idxOffset)}
+          ${this.#getArrayRefStmt(idxOffset)}
           
           i32.ge_u
           br_if 1
@@ -436,13 +444,13 @@ class Wasmcfigen {
         call 24
     end
     ${loadOriginalIdxStmt}
-    ${this.getArrayRefStmt(idxOffset)}
+    ${this.#getArrayRefStmt(idxOffset)}
 		call_indirect`;
 
     return watFileData.replace(/call_indirect/g, dataSectionRefStmt).slice(0, -2);
   };
 
-  modDataSection = (watFileData) => { 
+  #modDataSection = (watFileData) => { 
     const originalOffset = this.#getDataSectionOffset(
       watFileData.match(/\(data(.*)\)/g).pop()
     );
@@ -451,13 +459,13 @@ class Wasmcfigen {
       idxBoundDataSection,
       idxBoundPtrBytes,
       idxBoundBytes,
-    } = this.getIndexBoundarySections(originalOffset);
+    } = this.#getIndexBoundarySections(originalOffset);
     
     const newIdxDataSection = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}")`;
     const globalForOriginalIdx = `\n\t(global (mut i32) (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes})))`;
 
     return (
-      this.addDataSectionRefStmt(
+      this.#addDataSectionRefStmt(
         watFileData,
         originalOffset,
         originalOffset + idxBoundPtrBytes + idxBoundBytes,
