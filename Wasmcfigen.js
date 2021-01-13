@@ -29,52 +29,128 @@ const TYPEVAL = {
   "int*": 19,
 };
 
-let typeCountGlobal = Object.keys(TYPEVAL).length - 1;
+let typeCountGlobal = Object.keys(TYPEVAL).length - 2;
+
+let declObj = {};
 
 class Wasmcfigen {
-  constructor(functionSigFile) {
+  constructor(functionSigFile, watPath) {
     
+    this.indCallObj = {};
     this.sigObj = {};
     this.declCounts = 0;
     this.indCalls = 0;
     this.randIndexes = [];
     
     try {
-      const funcDeclArr = fs.readFileSync(functionSigFile, "utf8").split("\n");
-      this.declCounts = funcDeclArr.length;
-      let funcObj = funcDeclArr.map((decl, index) => this.#parseIntoObj(decl, index));
+      const sigFileData = fs.readFileSync(functionSigFile, "utf8");
+      this.#parseSigFileIntoObj(sigFileData);
+      this.#filterIndCallSync(watPath);
 
-      this.#sortFuncsByTypeValue(funcObj);
-      this.#setSigObj(funcObj);
+      // this.declCounts = funcDeclArr.length;
+      // let funcObj = funcDeclArr.map((decl, index) => this.#parseIntoObj(decl, index));
+      
+      let indCallSigValList = this.#sortFuncsByTypeValue(this.indCallObj);
+      this.#setSigObj(indCallSigValList);
+      console.log(TYPEVAL)
     } catch (err) {
       console.log(`Processing Function Signature Failed`, err);
       return;
     }
   }
 
-  #parseIntoObj = (declStr, index) => {
-    const funcName = declStr.split(",")[0];
-    const retAndParams = declStr.match(/\[(.*?)\]/g);
-    const typeLen = retAndParams.length;
+  #filterIndCallSync = (watPath) => {
+      const elemFuncSection = this.#readElemSync(watPath);
+      elemFuncSection.forEach((funcName, tableIdx) => {
+        funcName = funcName.slice(1);
+        this.indCallObj[funcName] = ( (declObj[funcName]) ? declObj[funcName] : {} );
+        this.indCallObj[funcName].originalIdx = tableIdx + 1;
+      });
+  }
 
-    if (typeLen === 0)
-      throw new Error("Wrong Format, At Least 1 Tokens(Name)");
-    (typeLen === 1) && tokenArr.push("['void']");
-    
-    return {
-      name: funcName,
-      ret: this.#getRetTypeVal(retAndParams[0]),
-      params: this.#getParamTypeVal(retAndParams.slice(1)),
-      originalIdx: index + 1,
-    };
+  #readElemSync = (watPath) => {
+      let pathTokens = watPath.split("/");
+      const watFileName = pathTokens.pop();
+      const dirPath = ((pathTokens.length === 0) ? '.' : pathTokens.join('/'));
+      const wasmPath = `${dirPath}/${watFileName.split(".")[0]}.wasm`;
+
+      const isExist = this.#isWatExist(dirPath, watFileName);
+      !isExist && this.#createWat(wasmPath, watPath);
+      
+      const watFileData = fs.readFileSync(watPath, "utf8");
+      return watFileData
+              .match(/\(elem(.*)\)/g)[0]
+              .match(/func .*/)[0]
+              .slice(0,-1)
+              .split(" ")
+              .slice(1);
+  }
+
+  #createWat = (wasmPath, watPath) => this.#exec(`${WABTPATH}/wasm2wat ${wasmPath} -o ${watPath}`);
+  
+  #parseSigFileIntoObj = (funcSigFile) => {
+      const openParenthesis = '(';
+      const closeParenthesis =')';
+     funcSigFile.split("\n").forEach((line)=>{
+          let fs = {};
+          let funcName;
+          const indexOfFront = line.indexOf(openParenthesis);  
+          const indexOfBack = line.indexOf(closeParenthesis);
+          if(indexOfFront != -1 && indexOfBack != -1){
+              fs.funcArgs = line.slice(indexOfFront+1, indexOfBack)
+                          .split(", ")
+                          .map((arg)=> arg.split(" ").slice(0, -1).join(" "));
+              const retTypeAndName = line.slice(0, indexOfFront).trim().split(' ');
+              funcName = retTypeAndName.pop();
+              fs.funcRets = retTypeAndName.join(" ");            
+          }
+          declObj[funcName]=fs;
+      })
+  }
+
+  modWatSync = (watPath) => {
+    let pathTokens = watPath.split("/");
+    const watFileName = pathTokens.pop();
+    const dirPath = ((pathTokens.length === 0) ? '.' : pathTokens.join('/'));
+    const wasmPath = `${dirPath}/${watFileName.split(".")[0]}.wasm`;
+
+    // console.log("Mod Wat Start...", wasmPath, watPath);
+
+    try {
+      this.#indexRandomize();
+      
+      const isExist = this.#isWatExist(dirPath, watFileName);
+      isExist
+        ? this.#renewIndexSection(watPath)
+        : this.#createAndModWat(wasmPath, watPath);
+
+      this.#exec(`${WABTPATH}/wat2wasm ${watPath} -o ${wasmPath}`);
+    } catch (err) {
+      console.log(`Wasm-Cfi Error, Wat Modification Failed.`, err);
+    }
   };
 
-  #getRetTypeVal = (retTypeStr) => {
-    const sanitizedStr = retTypeStr.split("', '").join(" ").slice(2, -2);
+  // #parseIntoObj = (declStr, index) => {
+  //   const funcName = declStr.split(",")[0];
+  //   const retAndParams = declStr.match(/\[(.*?)\]/g);
+  //   const typeLen = retAndParams.length;
 
-    let expected = TYPEVAL[sanitizedStr];
-    if (expected === "undefined") {
-      TYPEVAL[sanitizedStr] = typeCountGlobal;
+  //   if (typeLen === 0)
+  //     throw new Error("Wrong Format, At Least 1 Tokens(Name)");
+  //   (typeLen === 1) && tokenArr.push("['void']");
+    
+  //   return {
+  //     name: funcName,
+  //     ret: this.#getRetTypeVal(retAndParams[0]),
+  //     params: this.#getParamTypeVal(retAndParams.slice(1)),
+  //     originalIdx: index + 1,
+  //   };
+  // };
+
+ #getRetTypeVal = (retTypeStr) => {
+    let expected = TYPEVAL[`${retTypeStr}`];
+    if (typeof expected === "undefined") {
+      TYPEVAL[`${retTypeStr}`] = typeCountGlobal;
       expected = typeCountGlobal++;
     }
     return expected;
@@ -83,10 +159,9 @@ class Wasmcfigen {
   #getParamTypeVal = (paramTypeStrArr) => {
     let expectedArr = paramTypeStrArr
       .map((paramTypeStr) => {
-        const sanitizedStr = paramTypeStr.slice(2, -2);
-        let expected = TYPEVAL[sanitizedStr];
+        let expected = TYPEVAL[`${paramTypeStr}`];
         if (typeof expected === "undefined") {
-          TYPEVAL[sanitizedStr] = typeCountGlobal;
+          TYPEVAL[`${paramTypeStr}`] = typeCountGlobal;
           expected = typeCountGlobal++;
         }
         return expected;
@@ -95,12 +170,27 @@ class Wasmcfigen {
     return expectedArr;
   };
 
-  #sortFuncsByTypeValue = (funcSigList) => {
-    funcSigList.sort((a, b) => {
+  #convertTypeToValues = (funcSigList) => ( 
+    funcSigList.map((sig) => {
+      let retType = (sig[1].funcRets ? sig[1].funcRets : 'nil');
+      let argTypes = (sig[1].funcArgs ? sig[1].funcArgs : ['void']);
+      return {
+        name: sig[0],
+        ret: this.#getRetTypeVal(retType),
+        params: this.#getParamTypeVal(argTypes),
+        originalIdx: sig[1].originalIdx,
+      }
+    })
+  );
+
+  #sortFuncsByTypeValue = (funcSigObj) => {
+    let sigValList = this.#convertTypeToValues(Object.entries(funcSigObj));
+    sigValList.sort((a, b) => {
       return a.ret - b.ret
         ? a.ret - b.ret
         : this.#compareParams(a.params, b.params);
     });
+    return sigValList;
   };
 
   #compareParams = (a, b) => {
@@ -137,28 +227,6 @@ class Wasmcfigen {
 
                 wasmTable.set(newIndex, exported[func.funcName]);
             });
-  };
-
-  modWatSync = (watPath) => {
-    let pathTokens = watPath.split("/");
-    const watFileName = pathTokens.pop();
-    const dirPath = ((pathTokens.length === 0) ? '.' : pathTokens.join('/'));
-    const wasmPath = `${dirPath}/${watFileName.split(".")[0]}.wasm`;
-
-    // console.log("Mod Wat Start...", wasmPath, watPath);
-
-    try {
-      this.#indexRandomize();
-      
-      const isExist = this.#isWatExist(dirPath, watFileName);
-      isExist
-        ? this.#renewIndexSection(watPath)
-        : this.#createAndModWat(wasmPath, watPath);
-
-      this.#exec(`${WABTPATH}/wat2wasm ${watPath} -o ${wasmPath}`);
-    } catch (err) {
-      console.log(`Wasm-Cfi Error, Wat Modification Failed.`, err);
-    }
   };
 
   #isWatExist = (path, watFile) => fs.readdirSync(path).some(files => (files === watFile));
@@ -478,26 +546,26 @@ class Wasmcfigen {
 
   getSigObj = () => {
     for (const [sig, detail] of Object.entries(this.sigObj)) {
-      console.log(`${sig} : {\n\tfuncMem : {`);
+      console.log(`${sig} : {\tfuncMem : {`);
       detail.funcMem.forEach((func) => {
-        console.log(`\n\t\t{`);
+        console.log(`\t\t{`);
         for (const [key, val] of Object.entries(func)) 
-          console.log(`\n\t\t\t${key} : ${val}`);
-        console.log(`\n\t\t}`);
+          console.log(`\t\t\t${key} : ${val}`);
+        console.log(`\t\t}`);
       });
-      console.log(`\n\t}`);
-      console.log(`\n\tcount : ${detail.count}\n}`);
+      console.log(`\t}`);
+      console.log(`\tcount : ${detail.count}}`);
     }
   };
 
-  #setSigObj = (funcObjList) => {
+  #setSigObj = (funcObjValList) => {
     let arr, sig;
-    return funcObjList.map((obj, index) => {
+    return funcObjValList.map((obj, index) => {
       if (index === 0) {
         arr = Array.of({ funcName: obj.name, originalIdx: obj.originalIdx });
         sig = this.#getSigVal(obj.ret, obj.params);
       }
-      else if (index === funcObjList.length - 1) {
+      else if (index === funcObjValList.length - 1) {
         arr.push({ funcName: obj.name, originalIdx: obj.originalIdx });
         this.sigObj[sig] = { funcMem: arr, count: arr.length };
       }
@@ -518,3 +586,6 @@ class Wasmcfigen {
 }
 
 module.exports = Wasmcfigen;
+
+let cfi = new Wasmcfigen(process.argv[2], process.argv[3]);
+cfi.getSigObj();
