@@ -1,36 +1,29 @@
+//handleElem.js
+let startTime, endTime;
+const {performance} = require('perf_hooks');
+
+function myFunction() {
+
 const fs = require("fs");
 const execSync = require("child_process").execSync;
 
 const TYPEVAL = {
   nil: -1,
   void: 0,
-  bool: 1,
-  char: 2,
-  "unsigned char": 3,
-  short: 4,
-  "unsigned short": 5,
-  int: 6,
-  unsigned: 7,
-  "unsigned int": 8,
-  long: 9,
-  "unsigned long": 10,
-  "long long": 11,
-  "long long int": 12,
-  "unsigned long long": 13,
-  "unsigned long long int": 14,
-  float: 15,
-  double: 16,
-  "long double": 17,
-
-  "void*": 18,
-  "char*": 19,
-  "int*": 20,
+  i1: 1,
+  i8: 2,
+  i16: 3,
+  i32: 4,
+  f16: 5,
+  f32: 6,
+  f64 :7,
+  "void*": 8,
 };
 
-let typeCountGlobal = Object.keys(TYPEVAL).length - 2;
+let typeCountGlobal = Object.keys(TYPEVAL).length - 1;
 
 let watFileData;
-let originalSigObj = {};
+let callSiteObj = {};
 
 class Wasmcfigen {
   constructor(wabtBinPath, functionSignatureFilePath, watPath) {
@@ -48,43 +41,22 @@ class Wasmcfigen {
     this.elemFuncArr = []; 
 
     try {
-      const sigFileData = fs.readFileSync(this.externPaths[`funcSigPath`], "utf8");
-      this.#parseSignaturesIntoObj(sigFileData);
-      this.#runFuncChains(this.#filterIndCallSync, this.#sortFuncsByTypeValue, this.#setIndCallSigs)(this.externPaths[`watPath`]);
+      callSiteObj = JSON.parse(`{${fs.readFileSync(this.externPaths[`funcSigPath`], 'utf-8')}}`);
+      this.#runFuncChains(this.#filterIndCalleeSync, this.#sortFuncsByTypeValue, this.#setIndCallSigs)(this.externPaths[`watPath`]);
     } catch (err) {
       console.log(`Signature Processing Failed`, err);
       return;
     }
   }
 
-   #parseSignaturesIntoObj = (funcSigFile) => {
-      const openParenthesis = '(';
-      const closeParenthesis =')';
-      
-     funcSigFile.split("\n").forEach((line)=>{
-          let fs = {};
-          let funcName;
-          const indexOfFront = line.indexOf(openParenthesis);  
-          const indexOfBack = line.indexOf(closeParenthesis);
-          if(indexOfFront != -1 && indexOfBack != -1){
-              fs.funcArgs = line.slice(indexOfFront+1, indexOfBack)
-                          .split(", ")
-                          .map((arg)=> arg.split(" ").slice(0, -1).join(" "));
-              const retTypeAndName = line.slice(0, indexOfFront).trim().split(' ');
-              funcName = retTypeAndName.pop();
-              fs.funcRets = retTypeAndName.join(" ");            
-          }
-          originalSigObj[funcName] = fs;
-      })
-  }
-
-  #filterIndCallSync = (watPath) => {
+  #filterIndCalleeSync = (watPath) => {
       this.elemFuncArr = this.#readElemSync(watPath);
       this.indCallCount = this.elemFuncArr.length;
       let indCallObj = {};
       this.elemFuncArr.forEach((funcName, tableIdx) => {
         funcName = funcName.slice(1);
-        indCallObj[funcName] = ( (originalSigObj[funcName]) ? originalSigObj[funcName] : {} );
+        indCallObj[funcName] = {};
+        indCallObj[funcName].Type = ( (callSiteObj[funcName]) ? callSiteObj[funcName].Type : {ret:'', args :[]} );
         indCallObj[funcName].originalIdx = tableIdx + 1;
       });
       return indCallObj;
@@ -121,28 +93,31 @@ class Wasmcfigen {
     return expected;
   };
 
-  #convertTypeToValues = (funcSigList) => ( 
-    funcSigList.map((sig) => {
-      let retType = (sig[1].funcRets ? sig[1].funcRets : 'nil');
-      let argTypes = (typeof sig[1].funcArgs === 'undefined'  
+
+  #convertTypeToValues = (funcList) => ( 
+    funcList.map((func) => {
+      const typeObj = func[1].Type;
+      let retType = (typeObj.ret==='' ? 'void' : typeObj.ret);
+      let argTypes = (typeObj.args.length === 0  
                         ? ['nil']
-                        : ((sig[1].funcArgs[0] === '') ? ['void'] : sig[1].funcArgs));
+                        : typeObj.args);
       return {
-        name: sig[0],
+        name: func[0],
         ret: this.#getTypeVal(retType),
         params: argTypes.map((argType) => this.#getTypeVal(argType)),
-        originalIdx: sig[1].originalIdx,
+        originalIdx: func[1].originalIdx,
       }
     })
   );
 
-  #sortFuncsByTypeValue = (funcSigObj) => {
-    let sigValList = this.#convertTypeToValues(Object.entries(funcSigObj));
+  #sortFuncsByTypeValue = (indCallObj) => {
+    let sigValList = this.#convertTypeToValues(Object.entries(indCallObj));
     sigValList.sort((a, b) => {
       return a.ret - b.ret
         ? a.ret - b.ret
         : this.#compareParams(a.params, b.params);
     });
+
     return sigValList;
   };
 
@@ -169,6 +144,31 @@ class Wasmcfigen {
     return swapOrNot;
   };
 
+#setIndCallSigs = (funcObjValList) => {
+    let arr, sig;
+    return funcObjValList.map((obj, index) => {
+      const funcSigVal = this.#getSigVal(obj.ret, obj.params);
+      if (index === 0) {
+        arr = Array.of({ funcName: obj.name, originalIdx: obj.originalIdx });
+        sig = funcSigVal;
+      }
+      else if (sig !== funcSigVal) {
+          this.indCallSigs[sig] = { funcMem: arr, count: arr.length };
+          sig = funcSigVal;
+          arr = Array.of({ funcName: obj.name, originalIdx: obj.originalIdx });
+      } else {
+         arr.push({ funcName: obj.name, originalIdx: obj.originalIdx });
+      }
+
+      if (index === funcObjValList.length - 1) 
+        this.indCallSigs[sig] = { funcMem: arr, count: arr.length };
+    });
+  };
+
+    #getSigVal = (ret, paramArr) => {
+      (paramArr.length === 0) && (paramArr = [-1]);
+      return `${ret}_${paramArr.reduce((acc, cur) => acc + "_" + cur)}`;
+    }
   #genUniqueRands = (range) => {
     let arr = [];
     let rand;
@@ -199,8 +199,8 @@ class Wasmcfigen {
 
   #isWatModified = () =>  (watFileData.split('\n').pop().match(/\(global(.*)\)/g) != null)
   
-  modWatSync = (watPath) => {
-
+  modWatSync = () => {
+    const watPath = this.externPaths['watPath'];
     console.log(`Mod Wat Start...`, watPath);
 
     try {
@@ -211,7 +211,7 @@ class Wasmcfigen {
           ? this.#renewElemAndIndexSection(watPath)
           : this.#modNaiveWat(watPath)
 
-      this.#exec(`${this.externPaths[`wabtPath`]}/wat2wasm ${watPath} -o ${this.externPaths[`wasmPath`]}`);
+      this.#exec(`${this.externPaths[`wabtPath`]}/wat2wasm ${watPath} -o  ${this.externPaths[`wasmPath`]}`);
     } catch (err) {
       console.log(`Wasm-Cfi Error, Wat Modification Failed.`, err);
     }
@@ -223,7 +223,6 @@ class Wasmcfigen {
     let newIndicesSection = watFileData.match(/\(data(.*)\)/g).pop();
     const newDataSectionStr = this.#getNewIndexesArray(
       this.randIndexes,
-      this.indCallCount
     );
 
     watFileData = watFileData.replace(
@@ -236,7 +235,7 @@ class Wasmcfigen {
 
   #getNewIndexesArray = (idxArr) => {
     let hexValStr = "";
-    idxArr.forEach((newIdxStr) => {
+    idxArr.forEach((newIdxStr, orignalIdx) => {
       let newIdx = parseInt(newIdxStr); 
       hexValStr += this.#toLittleEndian(parseInt(newIdx).toString(16));
     });
@@ -252,6 +251,7 @@ class Wasmcfigen {
   }
 
   #modElemSection = () => {
+    console.log("Modify Elem Section...");
       let newElemFuncArr = Array.of(this.elemFuncArr.length);
       
       Object.values(this.indCallSigs)
@@ -263,43 +263,57 @@ class Wasmcfigen {
               }); 
       
       const newElemFuncStr = newElemFuncArr.reduce((acc, cur) => acc + `$${cur} ` , '').slice(0,-1);
-      // console.log(watFileData);
-      // console.log('ORIGINAL: ', this.elemFuncArr.join(" "));
-      // console.log('NEW : ' , newElemFuncStr);
       watFileData = watFileData.replace(this.elemFuncArr.join(" "), newElemFuncStr);
   }
 
   #modDataSection = () => { 
-    const originalOffset = this.#getDataSectionOffset(
-      watFileData.match(/\(data(.*)\)/g).pop()
-    );
+    console.log("Modify Data Section...");
+        const originalOffset = 65535;
 
-    const {
-      idxBoundDataSection,
-      idxBoundPtrBytes,
-      idxBoundBytes,
-    } = this.#getIndexBoundarySections(originalOffset);
+    this.#setIndexBoundaries();
+    console.log("Set Fixed Range Checkers...");
+    const funcBlockReg =  /\(func \$(.)*\n(\s*([^)(]*?)\(([^)(]+?)\)|\s*([^)(]*?))*([^)(]*?)\)/mg;
     
-    const newIdxDataSection = `\n\t(data (i32.const ${originalOffset + idxBoundPtrBytes + idxBoundBytes}) "${this.#getNewIndexesArray(this.randIndexes, this.indCalls)}")`;
-    const globalForOriginalIdx = `\n\t(global (mut i32) (i32.const ${originalOffset + idxBoundPtrBytes * 2 + idxBoundBytes})))`;
+    watFileData.match(funcBlockReg).forEach((funcBlock)=>{      
+      let modFuncBlock = funcBlock;
+      const fName = funcBlock.match(/\(func \$[0-9|a-z|A-Z|\_]*/g)[0].split('$')[1];
+      
+      if(!callSiteObj[fName]){
+         const rangeChecker = this.#getIndexRangeCheckStmt(
+            originalOffset,
+            this.indCallSigs[`0_-1`].lowerbound,
+            this.indCallSigs[`0_-1`].upperbound
+          );
+          modFuncBlock = modFuncBlock.replace(/call_indirect/g, rangeChecker);
+      }
+      else if(callSiteObj[fName].Calls.length > 0){
+        callSiteObj[fName].Calls.forEach(call => {
+          let typeValueStr = 
+            this.#getSigVal(this.#getTypeVal(call.ret), call.args.map((argType) => this.#getTypeVal(argType)));
+          typeValueStr = (this.indCallSigs[typeValueStr] ? typeValueStr : `0_-1`);
+          const rangeChecker = 
+            this.#getIndexRangeCheckStmt(
+            originalOffset,
+            this.indCallSigs[typeValueStr].lowerbound,
+            this.indCallSigs[typeValueStr].upperbound
+          );
+          modFuncBlock = modFuncBlock.replace(/call_indirect/, rangeChecker);
+        })
+      }
+      watFileData =  watFileData.replace(funcBlock, modFuncBlock);
+    });  
+    watFileData = watFileData.replace(/call_mindirect/g, 'call_indirect');
+    
+    console.log("Render new index section...");
+    const newIdxDataSection = `\n\t(data (i32.const ${originalOffset}) "${this.#getNewIndexesArray(this.randIndexes)}")`;
+    const globalForOriginalIdx = `\n\t(global (mut i32) (i32.const ${originalOffset + 4 * this.indCallCount})))`;
 
     return (
-      this.#addDataSectionRefStmt(
-        originalOffset,
-        originalOffset + idxBoundPtrBytes + idxBoundBytes,
-      ) +
-      idxBoundDataSection +
+      watFileData.slice(0,-2) +
       newIdxDataSection +
       globalForOriginalIdx
     );
   };
-
-  #getDataSectionOffset = (lastDataSection) => parseInt(lastDataSection.match(/i32.const [0-9]*/)[0]
-                                                                       .split(" ")
-                                                                       .pop() )
-                                                 + lastDataSection.match(/"(.*?)"/g)[0]
-                                                                 .split("\\")
-                                                                 .slice(1).length;
 
   #toLittleEndian = (hexStr) => {
     if (hexStr.length % 2 === 1) hexStr = "0".concat(hexStr);
@@ -312,74 +326,20 @@ class Wasmcfigen {
     return rst;
   };
 
-  #getIndexBoundarySections = (currentOffset) => {
-    let result = "";
-    let {
-      idxBounds,
-      idxBoundBytes,
-      idxBoundPtrArray,
-      idxBoundPtrBytes,
-    } = this.#setIndexBoundaries();
-    let idxBoundPtrs = this.#setIndexBoundPtrs(
-      currentOffset,
-      idxBoundPtrArray,
-      idxBoundPtrBytes
-    );
-
-    result += `\n\t(data (i32.const ${currentOffset}) "${idxBoundPtrs}")
-        \t(data (i32.const ${
-          currentOffset + idxBoundPtrBytes
-        }) "${idxBounds}")`;
-
-    return {
-      idxBoundDataSection: result,
-      idxBoundPtrBytes,
-      idxBoundBytes,
-    };
-  };
-
   #setIndexBoundaries = () => {
+    console.log('set index bound ...');
     let acc = 1;
-    let result = "";
-    let idxBoundPtrArray = [];
-    Object.values(this.indCallSigs)
-          .forEach( (sigDetail, sigIndex) => {
-              sigDetail.funcMem.forEach((funcInfo) =>
-                idxBoundPtrArray.push([funcInfo.originalIdx, sigIndex])
-              );
+    Object.entries(this.indCallSigs)
+          .forEach( (sigEntry) => {
+             const sigValue = sigEntry[0];
+             const sigDetail = sigEntry[1];
 
-              let lowerbound = acc;
-              let upperbound = (acc += parseInt(sigDetail.count));
-              
-              result += (this.#toLittleEndian(lowerbound.toString(16)) +
-                          this.#toLittleEndian(upperbound.toString(16)));
+              const lowerbound = acc;
+              const upperbound = (acc += parseInt(sigDetail.count));
+              this.indCallSigs[sigValue].lowerbound = lowerbound;
+              this.indCallSigs[sigValue].upperbound = upperbound;
           });
-
-    return {
-      idxBounds: result,
-      idxBoundBytes: (Object.keys(this.indCallSigs).length + 1) * 4 * 2,
-      idxBoundPtrArray,
-      idxBoundPtrBytes: (acc - 1) * 4,
-    };
   };
-
-  #setIndexBoundPtrs = (
-    offset,
-    idxBoundPtrArray,
-    idxBoundPtrBytes
-  ) => {
-    let result = "";
-    let offsetToIdxBounds = offset + idxBoundPtrBytes;
-    idxBoundPtrArray
-      .sort((a, b) => a[0] - b[0])
-      .forEach((pair, index) => {
-        result += this.#toLittleEndian(
-          (offsetToIdxBounds + 8 * pair[1]).toString(16)
-        );
-      });
-    return result;
-  };
-
 
   #getArrayRefStmt = (offset) =>
     `i32.const 1
@@ -388,44 +348,26 @@ class Wasmcfigen {
         i32.mul
         i32.load offset=${offset}`;
 
-  #addDataSectionRefStmt = (
-    ptrOffset,
+  #getIndexRangeCheckStmt = (
     idxOffset,
+    lowerbound,
+    upperbound
   ) => {
     const saveOriginalIdxStmt = `\n\t\t\tglobal.set 2`;
     const loadOriginalIdxStmt = '\n\t\t\tglobal.get 2';
 
-    const dataSectionRefStmt = `${saveOriginalIdxStmt}
-      \t\t\tblock 
-        block
-          ${loadOriginalIdxStmt}
-          ${this.#getArrayRefStmt(ptrOffset)}
-          i32.load ;; lower bound
+    const modifiedIndCallStmt = `${saveOriginalIdxStmt}
+      \t\t\ti32.const ${lowerbound}
+      \t\t\ti32.const ${upperbound}
+      \t\t\t${loadOriginalIdxStmt}
+      ${this.#getArrayRefStmt(idxOffset)}
+      \t\t\tcall $check_index_range
+    
+      ${loadOriginalIdxStmt}
+      ${this.#getArrayRefStmt(idxOffset)}
+		call_mindirect`;
 
-          ${loadOriginalIdxStmt}
-          ${this.#getArrayRefStmt(idxOffset)}
-
-          i32.lt_u
-          br_if 1
-
-          ${loadOriginalIdxStmt}
-          ${this.#getArrayRefStmt(ptrOffset)}
-          i32.load offset=4 ;; upper bound
-
-          ${loadOriginalIdxStmt}
-          ${this.#getArrayRefStmt(idxOffset)}
-          
-          i32.ge_u
-          br_if 1
-          br 0
-        end
-        call $print_err
-    end
-    ${loadOriginalIdxStmt}
-    ${this.#getArrayRefStmt(idxOffset)}
-		call_indirect`;
-
-    return watFileData.replace(/call_indirect/g, dataSectionRefStmt).slice(0, -2);
+    return modifiedIndCallStmt;
   };
 
   getIndCallSigs = () => {
@@ -438,33 +380,12 @@ class Wasmcfigen {
         console.log(`\t\t}`);
       });
       console.log(`\t}`);
+      
+      console.log(`\tLB : ${detail.lowerbound},`);
+      console.log(`\tUB : ${detail.upperbound},`);
       console.log(`\tcount : ${detail.count}}`);
     }
   };
-
-  #setIndCallSigs = (funcObjValList) => {
-    let arr, sig;
-    return funcObjValList.map((obj, index) => {
-      if (index === 0) {
-        arr = Array.of({ funcName: obj.name, originalIdx: obj.originalIdx });
-        sig = this.#getSigVal(obj.ret, obj.params);
-      }
-      else if (index === funcObjValList.length - 1) {
-        arr.push({ funcName: obj.name, originalIdx: obj.originalIdx });
-        this.indCallSigs[sig] = { funcMem: arr, count: arr.length };
-      }
-      else {
-        if (sig != this.#getSigVal(obj.ret, obj.params)) {
-          this.indCallSigs[sig] = { funcMem: arr, count: arr.length };
-          arr = Array.of({ funcName: obj.name, originalIdx: obj.originalIdx });
-          sig = this.#getSigVal(obj.ret, obj.params);
-        } else arr.push({ funcName: obj.name, originalIdx: obj.originalIdx });
-      }
-    });
-  };
-
-    #getSigVal = (ret, paramArr) =>
-    `${ret}_${paramArr.reduce((acc, cur) => acc + "_" + cur)}`;
 
   modWasmTable = (wasmTable) => {
         let webAssemblyFunctions = []; 
@@ -493,9 +414,7 @@ class Wasmcfigen {
 
 module.exports = Wasmcfigen;
 
-// let cfi = new Wasmcfigen(process.argv[2], process.argv[3], process.argv[4]);
-// cfi.getIndCallSigs();
-// // cfi.indexRandomize();
-// // console.log(TYPEVAL)
-// // console.log(cfi.randIndexes)
-//  cfi.modWatSync(process.argv[3]);
+let cfi = new Wasmcfigen(...argv.slice(1));
+cfi.modWatSync();
+
+}
