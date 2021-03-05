@@ -430,7 +430,8 @@ class Wasmcfigen {
     );
   };
 
-  private exec = (command) => CHILDPROCESS.execSync(command).toString().trim();
+  private exec = (command: string) =>
+    CHILDPROCESS.execSync(command).toString().trim();
 
   static printSignatureSets = (cfiGen: Wasmcfigen): void => {
     const signatureSets = cfiGen.getIndCallSigs();
